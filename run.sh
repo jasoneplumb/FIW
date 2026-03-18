@@ -8,7 +8,7 @@ NOTEBOOK="$SCRIPT_DIR/main.ipynb"
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating virtual environment..."
     python3 -m venv "$VENV_DIR"
-    "$VENV_DIR/bin/pip" install torch torchvision pandas scikit-learn matplotlib kaggle jupyter
+    "$VENV_DIR/bin/pip" install torch torchvision pandas scikit-learn matplotlib kaggle jupyter facenet-pytorch
 fi
 
 source "$VENV_DIR/bin/activate"

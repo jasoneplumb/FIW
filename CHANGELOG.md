@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned
-- Replace backbone with pretrained face model (#7)
-- Increase resolution and add data augmentation (#8)
+### Changed
+- Replaced 2-layer CNN backbone with pretrained InceptionResnetV1 (FaceNet, VGGFace2) (#7)
+- Froze early layers; fine-tuning last 2 blocks (repeat_3, block8) + new FC head (512→128) (#7)
+- Optimizer now targets only trainable parameters (#7)
+- Input resolution increased from 56×56 to 160×160 to match FaceNet requirements (#8)
+- Input normalization updated to [-1, 1] range (mean=0.5, std=0.5 per channel) (#8)
+
+### Added
+- `facenet-pytorch` dependency in `run.sh` (#7)
+- Training data augmentation: RandomHorizontalFlip, RandomRotation(±10°), ColorJitter (#8)
+- Separate `train_transform` and `eval_transform` pipelines (#8)
+- `ImagePairDataset` now accepts a `transform` parameter for split-specific pipelines (#8)
 
 ## [0.5.0] - 2026-03-09
 
