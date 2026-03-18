@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-18
+
 ### Changed
 - Replaced 2-layer CNN backbone with pretrained InceptionResnetV1 (FaceNet, VGGFace2) (#7)
 - Froze early layers; fine-tuning last 2 blocks (repeat_3, block8) + new FC head (512→128) (#7)
@@ -14,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Input resolution increased from 56×56 to 112×112 (#8)
 - Training epochs reduced from 50 to 10 (pretrained backbone converges faster)
 - Input normalization updated to [-1, 1] range (mean=0.5, std=0.5 per channel) (#8)
+- Kaggle data download now skipped when zip already exists on disk
 
 ### Added
 - `facenet-pytorch` dependency in `run.sh` (#7)
