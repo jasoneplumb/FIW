@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced 2-layer CNN backbone with pretrained InceptionResnetV1 (FaceNet, VGGFace2) (#7)
 - Froze early layers; fine-tuning last 2 blocks (repeat_3, block8) + new FC head (512→128) (#7)
 - Optimizer now targets only trainable parameters (#7)
-- Input resolution increased from 56×56 to 160×160 to match FaceNet requirements (#8)
+- Input resolution increased from 56×56 to 112×112 (#8)
+- Training epochs reduced from 50 to 10 (pretrained backbone converges faster)
 - Input normalization updated to [-1, 1] range (mean=0.5, std=0.5 per channel) (#8)
 
 ### Added
