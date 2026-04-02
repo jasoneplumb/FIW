@@ -1,0 +1,9 @@
+torch
+torchvision
+pandas
+scikit-learn
+matplotlib
+kaggle
+jupyter
+Pillow
+facenet_pytorch

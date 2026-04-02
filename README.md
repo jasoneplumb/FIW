@@ -6,11 +6,13 @@ Given a pair of face images, the model predicts the probability that the two ind
 
 ## Architecture
 
-A Siamese CNN with shared weights processes each image independently through two convolutional layers (3→32→64 channels, with ReLU and max-pooling), followed by fully connected layers (9216→512→256→128) to produce a 128-dimensional embedding. Pairs are compared via Euclidean distance and trained with contrastive loss.
+A Siamese network with shared weights uses a pretrained InceptionResnetV1 (FaceNet, VGGFace2) backbone with frozen early layers and fine-tuned last 2 blocks (repeat_3, block8), followed by a fully connected head (512→128) to produce a 128-dimensional embedding. Pairs are compared via Euclidean distance and trained with contrastive loss.
 
-- **Input**: 56×56 RGB face images
+- **Input**: 112×112 RGB face images
+- **Backbone**: InceptionResnetV1 (pretrained on VGGFace2) with selective fine-tuning
 - **Training**: ~216K balanced pairs (108K related + 108K unrelated), family-aware 70/15/15 split
-- **Optimizer**: Adam (lr=0.0001), 50 epochs, batch size 64
+- **Data Augmentation**: Random horizontal flip, rotation (±10°), color jitter
+- **Optimizer**: Adam (lr=0.0001), 10 epochs, batch size 64
 
 ## Quick Start
 
