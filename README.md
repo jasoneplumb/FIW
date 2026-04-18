@@ -1,18 +1,54 @@
 # Recognizing Faces in the Wild (FIW)
 
+![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
+![PyTorch](https://img.shields.io/badge/pytorch-2.0%2B-ee4c2c)
+![AUC](https://img.shields.io/badge/AUC-%E2%89%A5%200.80-brightgreen)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
 Kinship verification from facial images using a Siamese convolutional neural network trained on the [Families in the Wild](https://www.kaggle.com/c/recognizing-faces-in-the-wild) dataset from Northeastern University's SMILE Lab.
 
 Given a pair of face images, the model predicts the probability that the two individuals are related.
+
+## Motivation
+
+This project explores a core challenge in computer vision: can a neural network learn to recognize familial resemblance from unconstrained face images? Beyond the Kaggle competition, it serves as a case study in deliberate, iterative model development — evolving from a naive 2-layer CNN (v0.1) to a fine-tuned FaceNet backbone (v0.6) through a series of principled improvements:
+
+- **v0.1** — Baseline Siamese CNN with a 2K-pair subsample
+- **v0.2–v0.3** — Fixed inverted contrastive loss, added reproducibility seeds, cross-platform support
+- **v0.4** — Added proper evaluation metrics (AUC-ROC, Youden's J threshold)
+- **v0.5** — Scaled to full dataset with family-aware splits to eliminate data leakage
+- **v0.6** — Pretrained FaceNet backbone with selective fine-tuning and data augmentation
+
+Each version addressed a specific weakness exposed by the previous iteration. The full history is in the [CHANGELOG](CHANGELOG.md).
+
+## Results
+
+![AUC Visualization](auc_visualization.png)
+
+| Metric | Value |
+|--------|-------|
+| **AUC-ROC** | ≥ 0.80 |
+| **Threshold Selection** | Youden's J statistic |
+| **Training Pairs** | ~216K balanced (108K related + 108K unrelated) |
+| **Training Time** | ~12 min (GPU T4) / ~35 min (CPU) |
+
+The model produces well-separated distance distributions for related vs. unrelated pairs, with the optimal operating point selected via Youden's J on the ROC curve.
 
 ## Architecture
 
 A Siamese network with shared weights uses a pretrained InceptionResnetV1 (FaceNet, VGGFace2) backbone with frozen early layers and fine-tuned last 2 blocks (repeat_3, block8), followed by a fully connected head (512→128) to produce a 128-dimensional embedding. Pairs are compared via Euclidean distance and trained with contrastive loss.
 
-- **Input**: 112×112 RGB face images
+- **Input**: 112x112 RGB face images
 - **Backbone**: InceptionResnetV1 (pretrained on VGGFace2) with selective fine-tuning
 - **Training**: ~216K balanced pairs (108K related + 108K unrelated), family-aware 70/15/15 split
-- **Data Augmentation**: Random horizontal flip, rotation (±10°), color jitter
+- **Data Augmentation**: Random horizontal flip, rotation (+-10 deg), color jitter
 - **Optimizer**: Adam (lr=0.0001), 10 epochs, batch size 64
+
+### Key Engineering Decisions
+
+- **Family-aware splits** prevent data leakage — no family appears in more than one split, ensuring the model generalizes to unseen families rather than memorizing individuals
+- **Transfer learning with selective fine-tuning** — freezing early FaceNet layers preserves general face features while fine-tuning the last 2 blocks adapts to kinship-specific patterns
+- **Balanced pair generation** — equal positive/negative sampling prevents the model from exploiting class imbalance
 
 ## Quick Start
 
@@ -31,29 +67,32 @@ A Siamese network with shared weights uses a pretrained InceptionResnetV1 (FaceN
 ./run.sh --headless
 ```
 
-The script creates a virtual environment, installs dependencies (`torch`, `torchvision`, `pandas`, `scikit-learn`, `matplotlib`, `kaggle`, `jupyter`), and launches the notebook.
+The script creates a virtual environment, installs dependencies (`torch`, `torchvision`, `pandas`, `scikit-learn`, `matplotlib`, `kaggle`, `jupyter`, `facenet-pytorch`), and launches the notebook.
 
-## Project Structure
+### Run on Kaggle
 
-```
-main.ipynb              # End-to-end pipeline (download → train → evaluate → submit)
-run.sh                  # Setup and launch script
-_provided-data/         # Raw Kaggle competition archive
-_recognizing-faces-in-the-wild/  # Extracted competition files
-_train-faces/           # 786 family directories with member face images
-_test-faces/            # 4,866 unlabeled test images
-_model-state-dict.pth   # Saved model weights (generated after training)
-submission.csv          # Kaggle submission file (generated after inference)
-```
+For cloud execution with free GPU, see the [Kaggle Setup Guide](KAGGLE_SETUP.md) or open `kaggle.ipynb` directly in a Kaggle Notebook.
 
 ## Pipeline
 
 1. **Download** — Fetches competition data via the Kaggle API
 2. **Clean** — Loads `train_relationships.csv`, removes pairs with missing image data (1,108 of 3,598 removed)
 3. **Split** — Family-aware 70/15/15 split (no family leaks across splits), balanced positive/negative pairs
-4. **Train** — Siamese network with contrastive loss for 50 epochs
+4. **Train** — Siamese network with contrastive loss for 10 epochs
 5. **Evaluate** — AUC-ROC, accuracy, precision, recall at optimal threshold (Youden's J); ROC curve and distance distribution plots
 6. **Submit** — Generates `submission.csv` with pairwise relatedness probabilities for all ~11.8M test pairs
+
+## Project Structure
+
+```
+main.ipynb              # End-to-end pipeline (download -> train -> evaluate -> submit)
+kaggle.ipynb            # Cloud-optimized variant for Kaggle Notebooks
+run.sh                  # Setup and launch script
+extract_metrics.py      # Standalone metrics extraction from trained model
+visualize_auc.py        # Generates AUC visualization dashboard
+quick_verify.py         # Component verification (model, loss, metrics)
+requirements.txt        # Python dependencies
+```
 
 ## Citations
 
