@@ -1,6 +1,6 @@
 # Recognizing Faces in the Wild (FIW)
 
-![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
+![Python 3.11](https://img.shields.io/badge/python-3.11-blue)
 ![PyTorch](https://img.shields.io/badge/pytorch-2.0%2B-ee4c2c)
 ![AUC](https://img.shields.io/badge/AUC-%E2%89%A5%200.80-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
@@ -54,7 +54,7 @@ A Siamese network with shared weights uses a pretrained InceptionResnetV1 (FaceN
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.11. On macOS, install it with `brew install python@3.11`.
 - A [Kaggle API key](https://www.kaggle.com/docs/api) at `~/.kaggle/kaggle.json`
 
 ### Run
