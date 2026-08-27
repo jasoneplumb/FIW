@@ -2,7 +2,7 @@
 
 ![Python 3.11](https://img.shields.io/badge/python-3.11-blue)
 ![PyTorch](https://img.shields.io/badge/pytorch-2.0%2B-ee4c2c)
-![AUC](https://img.shields.io/badge/AUC-%E2%89%A5%200.80-brightgreen)
+![AUC](https://img.shields.io/badge/AUC--ROC-0.674-yellow)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 Kinship verification from facial images using a Siamese convolutional neural network trained on the [Families in the Wild](https://www.kaggle.com/c/recognizing-faces-in-the-wild) dataset from Northeastern University's SMILE Lab.
@@ -25,14 +25,19 @@ Each version addressed a specific weakness exposed by the previous iteration. Th
 
 ![AUC Visualization](auc_visualization.png)
 
+Measured on the held-out test split (21,674 pairs: 10,837 related + 10,837 unrelated, from families unseen during training):
+
 | Metric | Value |
 |--------|-------|
-| **AUC-ROC** | ≥ 0.80 |
-| **Threshold Selection** | Youden's J statistic |
+| **AUC-ROC** | 0.674 |
+| **Accuracy** | 0.626 |
+| **Precision** | 0.631 |
+| **Recall** | 0.605 |
+| **Threshold Selection** | Youden's J statistic (0.448) |
 | **Training Pairs** | ~216K balanced (108K related + 108K unrelated) |
 | **Training Time** | ~12 min (GPU T4) / ~35 min (CPU) |
 
-The model produces well-separated distance distributions for related vs. unrelated pairs, with the optimal operating point selected via Youden's J on the ROC curve.
+Related and unrelated pairs separate in the expected direction — related pairs have lower mean embedding distance — but the distributions overlap substantially, which is what the 0.674 AUC reflects. The operating point is selected via Youden's J on the ROC curve. The project's original success criterion of AUC ≥ 0.80 has not been met.
 
 ## Architecture
 
