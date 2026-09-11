@@ -94,18 +94,17 @@ if [ "$CREATE_VENV" -eq 1 ]; then
     echo "Installing dependencies..."
     "$VENV_DIR/bin/pip" install --upgrade pip
 
-    # PyTorch: use CPU-only wheels on Linux to avoid downloading CUDA bundles;
+    # Pinned versions from requirements.txt keep the environment reproducible.
+    # On Linux, pull CPU-only torch wheels to avoid downloading CUDA bundles;
     # on macOS pip defaults to the correct variant (MPS-capable on Apple Silicon).
     case "$OS" in
         Darwin)
-            "$VENV_DIR/bin/pip" install torch torchvision
+            "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
             ;;
         *)
-            "$VENV_DIR/bin/pip" install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+            "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements.txt" --extra-index-url https://download.pytorch.org/whl/cpu
             ;;
     esac
-
-    "$VENV_DIR/bin/pip" install pandas scikit-learn matplotlib kaggle jupyter facenet-pytorch
 fi
 
 source "$VENV_DIR/bin/activate"

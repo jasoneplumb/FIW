@@ -1,5 +1,6 @@
 # Recognizing Faces in the Wild (FIW)
 
+![CI](https://github.com/jasoneplumb/FIW/actions/workflows/ci.yml/badge.svg)
 ![Python 3.11](https://img.shields.io/badge/python-3.11-blue)
 ![PyTorch](https://img.shields.io/badge/pytorch-2.0%2B-ee4c2c)
 ![AUC](https://img.shields.io/badge/AUC--ROC-0.674-yellow)
@@ -72,7 +73,7 @@ A Siamese network with shared weights uses a pretrained InceptionResnetV1 (FaceN
 ./run.sh --headless
 ```
 
-The script creates a virtual environment, installs dependencies (`torch`, `torchvision`, `pandas`, `scikit-learn`, `matplotlib`, `kaggle`, `jupyter`, `facenet-pytorch`), and launches the notebook.
+The script creates a virtual environment, installs the pinned dependencies from `requirements.txt` (`torch`, `torchvision`, `pandas`, `scikit-learn`, `matplotlib`, `kaggle`, `jupyter`, `facenet-pytorch`), and launches the notebook.
 
 ### Run on Kaggle
 
@@ -94,9 +95,14 @@ main.ipynb              # End-to-end pipeline (download -> train -> evaluate -> 
 kaggle.ipynb            # Cloud-optimized variant for Kaggle Notebooks
 run.sh                  # Setup and launch script
 extract_metrics.py      # Standalone metrics extraction from trained model
+pair_sampling.py        # Negative-sampling policy and pair-set helpers
+image_pair_dataset.py   # Image-pair dataset with load-failure handling
+test_invariants.py      # Fast invariant checks (run by CI on every push/PR)
 visualize_auc.py        # Generates AUC visualization dashboard
 quick_verify.py         # Component verification (model, loss, metrics)
-requirements.txt        # Python dependencies
+requirements.txt        # Python dependencies (pinned to tested versions)
+requirements-dev.txt    # Dev/CI extras (pytest) on top of requirements.txt
+.github/workflows/ci.yml  # CI: env install + sampling/evaluation invariants
 ```
 
 ## Citations

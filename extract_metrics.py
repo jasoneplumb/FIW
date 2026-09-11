@@ -10,9 +10,12 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score, roc_curve, accuracy_score, precision_score, recall_score
 from facenet_pytorch import InceptionResnetV1
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-from PIL import Image
+
+from pair_sampling import (build_excluded_pairs, generate_negative_pairs,
+                           assert_pair_sets_disjoint)
+from image_pair_dataset import ImagePairDataset, valid_label_mask
 
 print("=" * 70)
 print("FIW Notebook - Final Metrics Extraction")
@@ -91,8 +94,6 @@ relations_df = pd.read_csv(relations_csv)
 
 # Get test split (last 15% of families)
 import random
-import glob
-from collections import defaultdict
 import itertools
 
 random.seed(42)
@@ -127,82 +128,24 @@ for _, row in test_relations.iterrows():
     for img1, img2 in itertools.product(p1_images, p2_images):
         positives.append([img1, img2, 1.0])
 
-# Build sets for negative-sampling exclusion:
-# 1. All known positive member pairs (from the full relations CSV, not just test)
-# 2. All same-family member pairs (family membership implies potential kinship)
-positive_member_pairs = set()
-for _, row in relations_df.iterrows():
-    positive_member_pairs.add((row.p1, row.p2))
-    positive_member_pairs.add((row.p2, row.p1))
-
-family_members = defaultdict(set)
-for m in members:
-    fam = m.split('/')[0]
-    family_members[fam].add(m)
-
-same_family_pairs = set()
-for fam, fam_members in family_members.items():
-    for m1, m2 in itertools.permutations(fam_members, 2):
-        same_family_pairs.add((m1, m2))
-
-excluded_pairs = positive_member_pairs | same_family_pairs
+# Negative-sampling exclusion policy lives in pair_sampling.py:
+# known positive pairs (both directions) plus all same-family pairs.
+excluded_pairs = build_excluded_pairs(relations_df, members)
 
 # Generate negative pairs — only from members in different families with no known relation
 split_members = [m for m in members if m.split('/')[0] in test_families and m in member_images]
-negatives = []
-neg_attempts = 0
-max_neg_attempts = len(positives) * 100
-while len(negatives) < len(positives) and neg_attempts < max_neg_attempts:
-    neg_attempts += 1
-    p1 = random.choice(split_members)
-    p2 = random.choice(split_members)
-    if p1 == p2 or (p1, p2) in excluded_pairs:
-        continue
-    p1_images = member_images[p1]
-    p2_images = member_images[p2]
-    for img1, img2 in itertools.product(p1_images, p2_images):
-        negatives.append([img1, img2, 0.0])
-        if len(negatives) >= len(positives):
-            break
+negatives = generate_negative_pairs(positives, split_members, member_images,
+                                    excluded_pairs, random)
 
-# Assert positive and negative image-pair sets are disjoint
-pos_img_pairs = set((p[0], p[1]) for p in positives)
-neg_img_pairs = set((p[0], p[1]) for p in negatives)
-overlap = pos_img_pairs & neg_img_pairs
-assert len(overlap) == 0, f"Positive/negative overlap: {len(overlap)} pairs"
+assert_pair_sets_disjoint(positives, negatives)
 print(f"[OK] Disjointness assertion passed — 0 overlap between positive and negative pairs")
 
 test_data = positives + negatives[:len(positives)]
 random.shuffle(test_data)
 print(f"[OK] Generated {len(test_data)} test pairs ({len(positives)} pos + {len(negatives[:len(positives)])} neg)")
 
-# Dataset
-class ImagePairDataset(Dataset):
-    LOAD_FAILURE_SENTINEL = float('nan')
-
-    def __init__(self, data, transform):
-        self.image_pairs = [sublist[:-1] for sublist in data]
-        self.labels = torch.tensor([sublist[-1] for sublist in data], dtype=torch.float32)
-        self.transform = transform
-        self.load_failures = 0
-
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, idx):
-        try:
-            img0 = Image.open('_train-faces/' + self.image_pairs[idx][0])
-            img1 = Image.open('_train-faces/' + self.image_pairs[idx][1])
-            img0 = self.transform(img0)
-            img1 = self.transform(img1)
-            return img0, img1, self.labels[idx]
-        except Exception as e:
-            print(f"[Warning] Failed to load image pair {idx}: {e}")
-            self.load_failures += 1
-            return (torch.zeros(3, 112, 112), torch.zeros(3, 112, 112),
-                    torch.tensor(self.LOAD_FAILURE_SENTINEL))
-
-test_dataset = ImagePairDataset(test_data, eval_transform)
+# Dataset (load-failure handling lives in image_pair_dataset.py)
+test_dataset = ImagePairDataset(test_data, eval_transform, image_root='_train-faces/')
 test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 print(f"[OK] Test loader: {len(test_dataset)} samples, {len(test_loader)} batches")
 
@@ -230,7 +173,7 @@ with torch.no_grad():
         data1, data2, label = data1.to(device), data2.to(device), label.to(device)
 
         # Filter out load-failure sentinels (NaN labels)
-        valid_mask = ~torch.isnan(label)
+        valid_mask = valid_label_mask(label)
         if not valid_mask.any():
             continue
         data1 = data1[valid_mask]

@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [mainline]
+  pull_request:
+
+jobs:
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Verify environment imports
+        run: python -c "import torch, torchvision, numpy, pandas, sklearn, matplotlib, PIL, facenet_pytorch; print('environment OK')"
+
+      - name: Run sampling/evaluation invariant checks
+        run: pytest test_invariants.py -v

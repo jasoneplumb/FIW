@@ -1,9 +1,13 @@
-torch
-torchvision
-pandas
-scikit-learn
-matplotlib
-kaggle
-jupyter
-Pillow
-facenet_pytorch
+# Pinned to the tested environment: Python 3.11.15 (see run.sh / README).
+# On Linux, install CPU-only torch wheels with:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2
+torchvision==0.17.2
+numpy==1.26.4
+pandas==3.0.2
+scikit-learn==1.8.0
+matplotlib==3.10.9
+kaggle==2.1.2
+jupyter==1.1.1
+Pillow==10.2.0
+facenet_pytorch==2.6.0
