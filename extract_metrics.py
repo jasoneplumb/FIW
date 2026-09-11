@@ -91,7 +91,6 @@ relations_df = pd.read_csv(relations_csv)
 
 # Get test split (last 15% of families)
 import random
-import glob
 from collections import defaultdict
 import itertools
 
