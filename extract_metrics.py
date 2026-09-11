@@ -127,13 +127,36 @@ for _, row in test_relations.iterrows():
     for img1, img2 in itertools.product(p1_images, p2_images):
         positives.append([img1, img2, 1.0])
 
-# Generate negative pairs
+# Build sets for negative-sampling exclusion:
+# 1. All known positive member pairs (from the full relations CSV, not just test)
+# 2. All same-family member pairs (family membership implies potential kinship)
+positive_member_pairs = set()
+for _, row in relations_df.iterrows():
+    positive_member_pairs.add((row.p1, row.p2))
+    positive_member_pairs.add((row.p2, row.p1))
+
+family_members = defaultdict(set)
+for m in members:
+    fam = m.split('/')[0]
+    family_members[fam].add(m)
+
+same_family_pairs = set()
+for fam, fam_members in family_members.items():
+    for m1, m2 in itertools.permutations(fam_members, 2):
+        same_family_pairs.add((m1, m2))
+
+excluded_pairs = positive_member_pairs | same_family_pairs
+
+# Generate negative pairs — only from members in different families with no known relation
 split_members = [m for m in members if m.split('/')[0] in test_families and m in member_images]
 negatives = []
-while len(negatives) < len(positives):
+neg_attempts = 0
+max_neg_attempts = len(positives) * 100
+while len(negatives) < len(positives) and neg_attempts < max_neg_attempts:
+    neg_attempts += 1
     p1 = random.choice(split_members)
     p2 = random.choice(split_members)
-    if p1 == p2:
+    if p1 == p2 or (p1, p2) in excluded_pairs:
         continue
     p1_images = member_images[p1]
     p2_images = member_images[p2]
@@ -142,16 +165,26 @@ while len(negatives) < len(positives):
         if len(negatives) >= len(positives):
             break
 
+# Assert positive and negative image-pair sets are disjoint
+pos_img_pairs = set((p[0], p[1]) for p in positives)
+neg_img_pairs = set((p[0], p[1]) for p in negatives)
+overlap = pos_img_pairs & neg_img_pairs
+assert len(overlap) == 0, f"Positive/negative overlap: {len(overlap)} pairs"
+print(f"[OK] Disjointness assertion passed — 0 overlap between positive and negative pairs")
+
 test_data = positives + negatives[:len(positives)]
 random.shuffle(test_data)
 print(f"[OK] Generated {len(test_data)} test pairs ({len(positives)} pos + {len(negatives[:len(positives)])} neg)")
 
 # Dataset
 class ImagePairDataset(Dataset):
+    LOAD_FAILURE_SENTINEL = float('nan')
+
     def __init__(self, data, transform):
         self.image_pairs = [sublist[:-1] for sublist in data]
         self.labels = torch.tensor([sublist[-1] for sublist in data], dtype=torch.float32)
         self.transform = transform
+        self.load_failures = 0
 
     def __len__(self):
         return len(self.labels)
@@ -165,8 +198,9 @@ class ImagePairDataset(Dataset):
             return img0, img1, self.labels[idx]
         except Exception as e:
             print(f"[Warning] Failed to load image pair {idx}: {e}")
-            # Return dummy tensors
-            return torch.zeros(3, 112, 112), torch.zeros(3, 112, 112), self.labels[idx]
+            self.load_failures += 1
+            return (torch.zeros(3, 112, 112), torch.zeros(3, 112, 112),
+                    torch.tensor(self.LOAD_FAILURE_SENTINEL))
 
 test_dataset = ImagePairDataset(test_data, eval_transform)
 test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
@@ -186,54 +220,93 @@ class ContrastiveLoss(nn.Module):
         return loss_contrastive
 
 criterion = ContrastiveLoss()
-test_distances = []
-test_labels = []
+all_distances = []
+all_labels = []
 running_loss = 0.0
+valid_samples = 0
 
 with torch.no_grad():
     for i, (data1, data2, label) in enumerate(test_loader):
         data1, data2, label = data1.to(device), data2.to(device), label.to(device)
+
+        # Filter out load-failure sentinels (NaN labels)
+        valid_mask = ~torch.isnan(label)
+        if not valid_mask.any():
+            continue
+        data1 = data1[valid_mask]
+        data2 = data2[valid_mask]
+        label = label[valid_mask]
+
         output1, output2 = model(data1, data2)
         loss = criterion(output1, output2, label)
         running_loss += loss.item() * data1.size(0)
+        valid_samples += data1.size(0)
         distances = F.pairwise_distance(output1, output2)
-        test_distances.extend(distances.cpu().numpy())
-        test_labels.extend(label.cpu().numpy())
+        all_distances.extend(distances.cpu().numpy())
+        all_labels.extend(label.cpu().numpy())
         if (i + 1) % 10 == 0:
             print(f"  Batch {i+1}/{len(test_loader)}")
 
-epoch_loss = running_loss / len(test_dataset)
-print(f"\n[OK] Test Loss: {epoch_loss:.4f}")
+# Report load failures
+if test_dataset.load_failures > 0:
+    print(f"\n[WARNING] {test_dataset.load_failures} image pairs failed to load and were EXCLUDED")
+print(f"[OK] Evaluated {valid_samples} valid samples out of {len(test_dataset)} total")
 
-# Metrics
-distances = np.array(test_distances)
-labels = np.array(test_labels)
-scores = 1 - (distances / distances.max())
+epoch_loss = running_loss / valid_samples
+print(f"[OK] Test Loss: {epoch_loss:.4f}")
 
-auc = roc_auc_score(labels, scores)
-fpr, tpr, thresholds = roc_curve(labels, scores)
-j_scores = tpr - fpr
-optimal_idx = np.argmax(j_scores)
-optimal_threshold = thresholds[optimal_idx]
+# Convert to arrays
+distances_arr = np.array(all_distances)
+labels_arr = np.array(all_labels)
+scores_arr = 1 - (distances_arr / distances_arr.max())
 
-predictions = (scores >= optimal_threshold).astype(float)
-acc = accuracy_score(labels, predictions)
-prec = precision_score(labels, predictions)
-rec = recall_score(labels, predictions)
+# Split into validation (threshold selection) and test (final metrics)
+# Use a deterministic split based on indices
+n_samples = len(scores_arr)
+indices = np.arange(n_samples)
+np.random.seed(123)
+np.random.shuffle(indices)
+val_size = int(0.6 * n_samples)
+val_idx = indices[:val_size]
+test_idx = indices[val_size:]
+
+val_scores = scores_arr[val_idx]
+val_labels = labels_arr[val_idx]
+test_scores = scores_arr[test_idx]
+test_labels = labels_arr[test_idx]
+
+# AUC on the full set (threshold-independent, unbiased)
+auc_full = roc_auc_score(labels_arr, scores_arr)
+
+# Select optimal threshold on the VALIDATION split only
+fpr_val, tpr_val, thresholds_val = roc_curve(val_labels, val_scores)
+j_scores_val = tpr_val - fpr_val
+optimal_idx = np.argmax(j_scores_val)
+optimal_threshold = thresholds_val[optimal_idx]
+
+# Evaluate threshold-dependent metrics on the held-out TEST split only
+predictions_test = (test_scores >= optimal_threshold).astype(float)
+acc = accuracy_score(test_labels, predictions_test)
+prec = precision_score(test_labels, predictions_test)
+rec = recall_score(test_labels, predictions_test)
+auc_test = roc_auc_score(test_labels, test_scores)
 
 print("\n" + "=" * 70)
 print("FINAL EVALUATION METRICS")
 print("=" * 70)
-print(f"AUC-ROC Score:             {auc:.4f}")
-print(f"Optimal Threshold:         {optimal_threshold:.4f}")
-print(f"Accuracy:                  {acc:.4f}")
-print(f"Precision:                 {prec:.4f}")
-print(f"Recall:                    {rec:.4f}")
+print(f"AUC-ROC Score (full):      {auc_full:.4f}")
+print(f"AUC-ROC Score (test):      {auc_test:.4f}")
+print(f"Threshold (from val split): {optimal_threshold:.4f}")
+print(f"  Val split size:          {len(val_labels)} ({len(val_labels[val_labels==1])} pos, {len(val_labels[val_labels==0])} neg)")
+print(f"  Test split size:         {len(test_labels)} ({len(test_labels[test_labels==1])} pos, {len(test_labels[test_labels==0])} neg)")
+print(f"Accuracy  (test split):    {acc:.4f}")
+print(f"Precision (test split):    {prec:.4f}")
+print(f"Recall    (test split):    {rec:.4f}")
 print("=" * 70)
 
 # Distance analysis
-pos_distances = distances[labels == 1.0]
-neg_distances = distances[labels == 0.0]
+pos_distances = distances_arr[labels_arr == 1.0]
+neg_distances = distances_arr[labels_arr == 0.0]
 mean_pos = np.mean(pos_distances)
 mean_neg = np.mean(neg_distances)
 
@@ -246,10 +319,10 @@ print(f"  Separation ratio:         {mean_neg / mean_pos:.2f}x")
 print("\n" + "=" * 70)
 print("SUCCESS CRITERIA (from Issue #1)")
 print("=" * 70)
-if auc >= 0.80:
-    print(f"[PASS] AUC >= 0.80: {auc:.4f}")
+if auc_full >= 0.80:
+    print(f"[PASS] AUC >= 0.80: {auc_full:.4f}")
 else:
-    print(f"[FAIL] AUC < 0.80: {auc:.4f}")
+    print(f"[FAIL] AUC < 0.80: {auc_full:.4f}")
 
 if mean_pos < mean_neg:
     print(f"[PASS] Model learns meaningful embeddings")
