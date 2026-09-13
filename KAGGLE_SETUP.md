@@ -62,6 +62,7 @@ Estimated times:
 
 After execution, check `/kaggle/working/`:
 - **logreg-head.pth** — Trained scoring-head weights
+- **arcface-w600k-r50.onnx** — Downloaded ArcFace recognizer
 - **evaluation.png** — ROC curve + similarity plots
 
 Download these for local use.
@@ -95,13 +96,15 @@ On first run, you should see:
 
 ```
 === TEST RESULTS ===
-AUC — cosine only:      ~0.75
-AUC — logreg head only: ~0.75
-AUC — rank blend:       ~0.76
-Optimal Threshold:      ~0.49
-Accuracy:               ~0.70
-Precision:              ~0.70
-Recall:                 ~0.70
+AUC — cos_vggface2: ~0.75
+AUC — cos_casia   : ~0.72
+AUC — cos_arcface : ~0.69
+AUC — head        : ~0.77
+AUC — rank blend  : ~0.78
+Optimal Threshold : ~0.47
+Accuracy          : ~0.71
+Precision         : ~0.71
+Recall            : ~0.72
 ```
 
 The pipeline is deterministic up to hardware differences (seeded splits, frozen encoder), so results should closely match the values above.
@@ -110,7 +113,7 @@ The pipeline is deterministic up to hardware differences (seeded splits, frozen 
 
 - Use the cached embeddings and trained head for inference on new images
 - Tune the scoring head (features, regularization) or the blend-weight grid
-- Ensemble additional pretrained face encoders (e.g., ArcFace)
+- Ensemble additional pretrained face encoders or add face alignment before ArcFace
 - Add additional training data
 
 ## Links
