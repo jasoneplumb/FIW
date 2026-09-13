@@ -46,6 +46,16 @@ Measured on the held-out test split (23,776 pairs: 11,888 related + 11,888 unrel
 
 Progression: fine-tuned Siamese (v0.6) 0.674 → single frozen encoder blend (v0.7) 0.764 → three-encoder ensemble (v0.8) 0.784, all without training any component larger than a single linear layer. Individually, ArcFace scores only 0.691 on these unaligned crops — its value is complementary signal, not standalone strength. The operating point is selected via Youden's J on the ROC curve. The project's original success criterion of AUC ≥ 0.80 has not been met.
 
+## Evidence
+
+| | |
+| --- | --- |
+| **Contribution** | Sole author of the pipeline, pair-sampling policy, family-aware splits, evaluation, and the measurement sequence that replaced fine-tuning with frozen encoders. AI-assisted implementation. The encoders themselves are third-party pretrained models (facenet-pytorch, insightface); the dataset is Families in the Wild from Northeastern's SMILE Lab. |
+| **Status** | Personal research project. Reported figures are the repository's own measurements, not independently reproduced. |
+| **Evidence** | AUC-ROC 0.784 (rank blend) on the held-out test split of 23,776 pairs from families unseen in training; per-encoder cosines 0.749 / 0.718 / 0.691 and concat-logreg head 0.768 on the same split. Progression 0.674 (v0.6 fine-tuned) → 0.764 (v0.7) → 0.784 (v0.8). |
+| **Reproduction** | Requires the Kaggle dataset and the pretrained encoder weights. README setup, then `./run.sh --headless`. Embeddings are cached per encoder, so the expensive step runs once. |
+| **Limitations** | The 0.80 target was not met. The v0.6 → v0.7 comparison spans a protocol change and is not a clean controlled A/B. ArcFace runs on unaligned crops and scores 0.691 alone; its contribution is complementary signal, not standalone strength. Youden's J selects the operating point, and accuracy/precision/recall are reported at that threshold — [confirm which split the threshold was selected on](#results) before quoting them as untouched-test metrics. Kinship inference from face images has obvious misuse potential and is published here as an evaluation exercise, not a deployable classifier. |
+
 ## Architecture
 
 The pipeline (`kinship.py`) has no fine-tuning. Three frozen pretrained encoders embed each face image exactly once (cached per encoder): `InceptionResnetV1` with VGGFace2 and CASIA-WebFace weights at their native 160×160, and the ArcFace w600k_r50 ONNX recognizer (insightface's buffalo_l) at its native 112×112 — all preprocessing is `(x−127.5)/127.5` RGB, and all embeddings are L2-normalized 512-d vectors. Pairs are scored by rank-blending four signals: the three per-encoder cosine similarities and the logit of a logistic-regression head (`Linear(3072, 1)`) over the concatenated symmetric pair features `[|e1−e2|, e1⊙e2]`. The blend weights are selected on the validation split over a 0.1-step simplex.
