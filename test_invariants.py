@@ -23,8 +23,9 @@ import torchvision.transforms as transforms
 from PIL import Image
 from sklearn.metrics import roc_auc_score
 
-from kinship import (build_pairs, embed_images, pair_features, rank_blend,
-                     select_blend_weight, stack_embeddings, train_logreg_head)
+from kinship import (build_pairs, clean_relations, embed_images,
+                     pair_features, rank_blend, select_blend_weight,
+                     stack_embeddings, train_logreg_head)
 from pair_sampling import (assert_pair_sets_disjoint, build_excluded_pairs,
                            generate_negative_pairs)
 
@@ -242,6 +243,22 @@ def test_train_logreg_head_learns_separable_data():
                                        epochs=30, patience=10,
                                        verbose_every=0)
     assert best_val > 0.9
+
+
+# --- Relation cleaning -------------------------------------------------------------
+
+def test_clean_relations_drops_members_without_images(tmp_path, relations_df):
+    with_images = tmp_path / 'F0001' / 'MID1'
+    with_images.mkdir(parents=True)
+    Image.new('RGB', (8, 8)).save(with_images / 'img0.jpg')
+    partner = tmp_path / 'F0001' / 'MID2'
+    partner.mkdir(parents=True)
+    Image.new('RGB', (8, 8)).save(partner / 'img0.jpg')
+    (tmp_path / 'F0002' / 'MID1').mkdir(parents=True)  # exists but empty
+
+    cleaned = clean_relations(relations_df, image_root=str(tmp_path))
+    # only the F0001 pair survives: F0002 members are empty or missing
+    assert list(cleaned.itertuples(index=False)) == [('F0001/MID1', 'F0001/MID2')]
 
 
 # --- Split construction -----------------------------------------------------------

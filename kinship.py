@@ -98,6 +98,22 @@ def embed_images(encoder, image_paths, image_root, device='cpu',
     return embeddings, failed
 
 
+def clean_relations(relations_df, image_root='_train-faces'):
+    """Drop relations whose members have no image directory or no images.
+
+    Mirrors the notebook's Step 2 cleaning so scripts reproduce the same
+    family split: a row survives only if both members' directories exist
+    and contain at least one file.
+    """
+    def has_images(member):
+        member_dir = os.path.join(image_root, member)
+        return os.path.isdir(member_dir) and len(os.listdir(member_dir)) > 0
+
+    keep = relations_df.apply(
+        lambda row: has_images(row.p1) and has_images(row.p2), axis=1)
+    return relations_df[keep]
+
+
 def build_pairs(relations_df, image_root='_train-faces', seed=42):
     """Family-aware 70/15/15 split with balanced, policy-compliant pairs.
 
