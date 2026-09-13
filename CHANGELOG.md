@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-13
+
 ### Changed
 - Ensembled three frozen encoders — FaceNet/VGGFace2, FaceNet/CASIA-WebFace (160×160) and ArcFace w600k_r50 ONNX (112×112) — test AUC 0.764 → 0.784 (#16)
 - Scoring head now trains on the concatenated pair features of all encoders (3,072-d); the final score rank-blends the three per-encoder cosine similarities with the head logit, weights selected on val over a 0.1-step simplex (#16)
