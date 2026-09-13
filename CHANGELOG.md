@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-12
+
 ### Changed
 - Replaced fine-tuned Siamese training with frozen FaceNet embeddings + cosine/logreg rank-blend — test AUC 0.674 → 0.764 (#14)
 - Encoder input resolution restored to the pretrained model's native 160×160 (was 112×112) (#14)
@@ -19,10 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `kinship.py` — scoring pipeline: cached frozen embeddings with load-failure tracking, relation cleaning, family-aware pair building, logreg head training, rank-blend and blend-weight selection (#14)
 - Invariant tests for the scoring pipeline using a stub encoder (no dataset or pretrained weights needed in CI) (#14)
+- Pinned dependencies (`requirements.txt`, `requirements-dev.txt`) and a CI workflow running fast sampling/evaluation invariant checks on every push/PR (#11)
+- `pair_sampling.py` — negative-sampling policy: negatives are never the same member, a known relation, or two members of the same family; pair-set disjointness asserted (#10)
+- Kaggle-optimized notebook (`kaggle.ipynb`) and setup guide (`KAGGLE_SETUP.md`) for cloud execution
+- MPS (Apple Silicon GPU) accelerator support in device selection
 
 ### Removed
 - End-to-end Siamese training: SiameseNetwork, ContrastiveLoss, training loop, data augmentation, and the 512→128 projection head — measurement showed the frozen encoder outperforms the fine-tuned network (#14)
 - `extract_metrics.py` and `image_pair_dataset.py` — redundant under the embedding pipeline; load-failure handling is covered by `kinship.embed_images`/`stack_embeddings` and their tests (#14)
+
+### Fixed
+- Evaluation correctness in the standalone metrics script: negative sampling, threshold selection, and failed-image handling (#10)
+
+### Documentation
+- README reports measured results with protocol attribution and the frozen-encoder rationale; badges, motivation, and structure updates
 
 ## [0.6.0] - 2026-03-18
 
