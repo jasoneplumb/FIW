@@ -37,14 +37,24 @@ Measured on the held-out test split (23,776 pairs: 11,888 related + 11,888 unrel
 | AUC-ROC (CASIA cosine) | 0.718 |
 | AUC-ROC (ArcFace cosine) | 0.691 |
 | AUC-ROC (concat logreg head) | 0.768 |
-| **Accuracy** | 0.712 |
-| **Precision** | 0.709 |
-| **Recall** | 0.719 |
-| **Threshold Selection** | Youden's J statistic (0.473) |
+| Accuracy (stale, see note) | 0.712 |
+| Precision (stale, see note) | 0.709 |
+| Recall (stale, see note) | 0.719 |
+| **Threshold Selection** | Youden's J (argmax TPR−FPR), selected on the validation split |
 | **Head Training Pairs** | ~216K balanced (108K related + 108K unrelated) |
 | **Runtime** | one-time embedding per encoder (~40 min total CPU, minutes on GPU), then head training ~15 min; embeddings are cached so re-runs skip the expensive steps |
 
-Progression: fine-tuned Siamese (v0.6) 0.674 → single frozen encoder blend (v0.7) 0.764 → three-encoder ensemble (v0.8) 0.784, all without training any component larger than a single linear layer. Individually, ArcFace scores only 0.691 on these unaligned crops — its value is complementary signal, not standalone strength. The operating point is selected via Youden's J on the ROC curve. The project's original success criterion of AUC ≥ 0.80 has not been met.
+> **Note on the three threshold-dependent metrics.** Until 2026-09-13,
+> `visualize_auc.py` selected the operating point by maximizing Youden's J on
+> the *test* split and then reported accuracy, precision, and recall at that
+> threshold on the same split — a best case rather than a held-out result. The
+> threshold is now selected on validation, matching how the blend weights were
+> always chosen. The three values above predate that fix and will change when
+> the pipeline is re-run; they are left visible rather than deleted so the
+> correction is legible. **AUC-ROC is threshold-free and is unaffected** — 0.784
+> stands, as does every per-encoder AUC.
+
+Progression: fine-tuned Siamese (v0.6) 0.674 → single frozen encoder blend (v0.7) 0.764 → three-encoder ensemble (v0.8) 0.784, all without training any component larger than a single linear layer. Individually, ArcFace scores only 0.691 on these unaligned crops — its value is complementary signal, not standalone strength. The project's original success criterion of AUC ≥ 0.80 has not been met.
 
 ## Evidence
 
@@ -54,7 +64,7 @@ Progression: fine-tuned Siamese (v0.6) 0.674 → single frozen encoder blend (v0
 | **Status** | Personal research project. Reported figures are the repository's own measurements, not independently reproduced. |
 | **Evidence** | AUC-ROC 0.784 (rank blend) on the held-out test split of 23,776 pairs from families unseen in training; per-encoder cosines 0.749 / 0.718 / 0.691 and concat-logreg head 0.768 on the same split. Progression 0.674 (v0.6 fine-tuned) → 0.764 (v0.7) → 0.784 (v0.8). |
 | **Reproduction** | Requires the Kaggle dataset and the pretrained encoder weights. README setup, then `./run.sh --headless`. Embeddings are cached per encoder, so the expensive step runs once. |
-| **Limitations** | The 0.80 target was not met. The v0.6 → v0.7 comparison spans a protocol change and is not a clean controlled A/B. ArcFace runs on unaligned crops and scores 0.691 alone; its contribution is complementary signal, not standalone strength. Youden's J selects the operating point, and accuracy/precision/recall are reported at that threshold — [confirm which split the threshold was selected on](#results) before quoting them as untouched-test metrics. Kinship inference from face images has obvious misuse potential and is published here as an evaluation exercise, not a deployable classifier. |
+| **Limitations** | The 0.80 target was not met. The v0.6 → v0.7 comparison spans a protocol change and is not a clean controlled A/B. ArcFace runs on unaligned crops and scores 0.691 alone; its contribution is complementary signal, not standalone strength. Youden's J selects the operating point on the validation split as of 2026-09-13; the accuracy, precision, and recall currently shown predate that fix, were computed at a test-selected threshold, and will change on the next run. AUC is threshold-free and unaffected. Kinship inference from face images has obvious misuse potential and is published here as an evaluation exercise, not a deployable classifier. |
 
 ## Architecture
 

@@ -78,8 +78,21 @@ print('Blend weights (selected on val, val AUC '
 
 auc = roc_auc_score(y_test, scores)
 fpr, tpr, thresholds = roc_curve(y_test, scores)
-optimal_idx = np.argmax(tpr - fpr)
-optimal_threshold = thresholds[optimal_idx]
+
+# The operating point is chosen on validation, never on test. Picking the
+# threshold that maximizes Youden's J on the test split and then reporting
+# accuracy/precision/recall at that threshold on the same split reports a
+# best case, not a held-out result -- the same leak the family-aware splits
+# exist to prevent, one level up. Blend weights are already selected on
+# validation; the threshold now follows the same rule. AUC is threshold-free
+# and unaffected either way.
+scores_val = kinship.rank_blend(signals_val, blend_weights)
+fpr_val, tpr_val, thresholds_val = roc_curve(y_val, scores_val)
+optimal_threshold = thresholds_val[np.argmax(tpr_val - fpr_val)]
+
+# Marker position on the test ROC: the val-selected threshold's operating
+# point, found by locating it on the test curve rather than by re-optimizing.
+optimal_idx = int(np.argmin(np.abs(thresholds - optimal_threshold)))
 predictions = (scores >= optimal_threshold).astype(float)
 acc = accuracy_score(y_test, predictions)
 prec = precision_score(y_test, predictions)
