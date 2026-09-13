@@ -85,6 +85,9 @@ class ArcFaceEncoder:
     def __init__(self, model_path=ARCFACE_MODEL_PATH, num_threads=None):
         import onnxruntime as ort
         options = ort.SessionOptions()
+        # The model metadata declares a static batch of 1; ORT logs a benign
+        # shape warning per batch otherwise. Errors only.
+        options.log_severity_level = 3
         if num_threads:
             options.intra_op_num_threads = num_threads
         self.session = ort.InferenceSession(model_path, sess_options=options,

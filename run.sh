@@ -82,7 +82,7 @@ elif ! is_required_python "$VENV_DIR/bin/python"; then
     echo "Existing virtual environment uses Python $venv_version; recreating it with Python $REQUIRED_PYTHON."
     rm -rf "$VENV_DIR"
     CREATE_VENV=1
-elif ! "$VENV_DIR/bin/python" -c "import torch, torchvision, pandas, sklearn, matplotlib, kaggle, notebook, facenet_pytorch" &>/dev/null; then
+elif ! "$VENV_DIR/bin/python" -c "import torch, torchvision, pandas, sklearn, matplotlib, kaggle, notebook, facenet_pytorch, onnxruntime" &>/dev/null; then
     CREATE_VENV=1
 fi
 
