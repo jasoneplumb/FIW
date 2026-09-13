@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Ensembled three frozen encoders — FaceNet/VGGFace2, FaceNet/CASIA-WebFace (160×160) and ArcFace w600k_r50 ONNX (112×112) — test AUC 0.764 → 0.784 (#16)
+- Scoring head now trains on the concatenated pair features of all encoders (3,072-d); the final score rank-blends the three per-encoder cosine similarities with the head logit, weights selected on val over a 0.1-step simplex (#16)
+- `rank_blend`/blend-weight selection generalized from two fixed signals to any number (#16)
+- `main.ipynb`, `kaggle.ipynb`, `visualize_auc.py`, `quick_verify.py` updated for multi-encoder signals (#16)
+
+### Added
+- `kinship.ArcFaceEncoder` (onnxruntime) with a one-time model downloader (~174MB from HuggingFace), `arcface_transform`, `concat_embeddings`, and `segment_cosines` (#16)
+- `onnxruntime` pinned in `requirements.txt`; `run.sh` venv check covers it (#16)
+- Invariant tests for concat alignment, segment cosines, multi-signal blend ordering, and simplex weight selection (#16)
+
 ## [0.7.0] - 2026-09-12
 
 ### Changed

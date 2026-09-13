@@ -2,9 +2,9 @@
 """Generate the AUC visualization dashboard for the kinship pipeline.
 
 Rebuilds the notebook's family split, scores the held-out test pairs with
-the cosine/logreg rank-blend, and renders auc_visualization.png. Requires
-a completed main.ipynb run: the embedding cache and trained head under
-_cache/ are reused (missing embeddings are computed on the fly).
+the multi-encoder rank-blend, and renders auc_visualization.png. Requires
+a completed main.ipynb run: the per-encoder embedding caches and trained
+head under _cache/ are reused (missing embeddings are computed on the fly).
 """
 
 import os
@@ -24,7 +24,16 @@ plt.style.use('seaborn-v0_8-darkgrid')
 
 TARGET_AUC = 0.80
 HEAD_PATH = '_cache/logreg-head.pth'
-CACHE_PATH = '_cache/embeddings-160.npz'
+
+# name -> (encoder factory, transform, cache path)
+ENCODER_SPECS = {
+    'vggface2': (lambda: kinship.load_encoder(), kinship.eval_transform,
+                 '_cache/embeddings-160.npz'),
+    'casia': (lambda: kinship.load_encoder(pretrained='casia-webface'),
+              kinship.eval_transform, '_cache/embeddings-casia-160.npz'),
+    'arcface': (lambda: kinship.ArcFaceEncoder(kinship.download_arcface()),
+                kinship.arcface_transform, '_cache/embeddings-arcface-112.npz'),
+}
 
 if not os.path.exists(HEAD_PATH):
     print(f'[ERROR] Trained head not found: {HEAD_PATH}')
@@ -39,28 +48,33 @@ splits = kinship.build_pairs(relations_df, seed=42)
 print('Loading embeddings and trained head...')
 unique_images = sorted({img for data in splits.values()
                         for pair in data for img in pair[:2]})
-encoder = None
-if not os.path.exists(CACHE_PATH):
-    encoder = kinship.load_encoder()
-embeddings, _ = kinship.embed_images(encoder, unique_images, '_train-faces',
-                                     cache_path=CACHE_PATH)
+tables = {}
+for name, (encoder_factory, transform, cache) in ENCODER_SPECS.items():
+    encoder = None if os.path.exists(cache) else encoder_factory()
+    tables[name], _ = kinship.embed_images(encoder, unique_images,
+                                           '_train-faces', transform=transform,
+                                           cache_path=cache)
 
-head = kinship.make_head()
+head = kinship.make_head(embedding_dim=512 * len(tables))
 head.load_state_dict(torch.load(HEAD_PATH, weights_only=True))
 
 print('Scoring validation and test pairs...')
-e1_val, e2_val, y_val, _ = kinship.stack_embeddings(embeddings, splits['val'])
-e1_test, e2_test, y_test, _ = kinship.stack_embeddings(embeddings, splits['test'])
+e1_val, e2_val, y_val, _ = kinship.concat_embeddings(list(tables.values()),
+                                                     splits['val'])
+e1_test, e2_test, y_test, _ = kinship.concat_embeddings(list(tables.values()),
+                                                        splits['test'])
 
-cosine_val = kinship.cosine_scores(e1_val, e2_val)
-logit_val = kinship.logit_scores(head, e1_val, e2_val)
-cosine_test = kinship.cosine_scores(e1_test, e2_test)
-logit_test = kinship.logit_scores(head, e1_test, e2_test)
+signal_names = [f'cos_{name}' for name in tables] + ['head']
+signals_val = kinship.segment_cosines(e1_val, e2_val) + \
+    [kinship.logit_scores(head, e1_val, e2_val)]
+signals_test = kinship.segment_cosines(e1_test, e2_test) + \
+    [kinship.logit_scores(head, e1_test, e2_test)]
 
-blend_weight, blend_val_auc = kinship.select_blend_weight(cosine_val, logit_val, y_val)
-scores = kinship.rank_blend(cosine_test, logit_test, blend_weight)
-print(f'Blend weight (cosine share, selected on val): {blend_weight:.1f} '
-      f'(val AUC {blend_val_auc:.4f})')
+blend_weights, blend_val_auc = kinship.select_blend_weights(signals_val, y_val)
+scores = kinship.rank_blend(signals_test, blend_weights)
+print('Blend weights (selected on val, val AUC '
+      f'{blend_val_auc:.4f}): '
+      + ', '.join(f'{n}={w:.1f}' for n, w in zip(signal_names, blend_weights)))
 
 auc = roc_auc_score(y_test, scores)
 fpr, tpr, thresholds = roc_curve(y_test, scores)
@@ -91,9 +105,8 @@ ax1.set_ylim([-0.02, 1.02])
 
 # 2. Blend components vs target
 ax2 = plt.subplot(2, 3, 2)
-categories = ['Cosine\nOnly', 'Head\nOnly', 'Rank\nBlend', 'Target']
-values = [roc_auc_score(y_test, cosine_test),
-          roc_auc_score(y_test, logit_test), auc, TARGET_AUC]
+categories = [n.replace('cos_', 'cos\n') for n in signal_names] + ['Rank\nBlend', 'Target']
+values = [roc_auc_score(y_test, sig) for sig in signals_test] + [auc, TARGET_AUC]
 colors = ['#06A77D' if v >= TARGET_AUC else '#D62828' for v in values]
 bars = ax2.bar(categories, values, color=colors, alpha=0.8,
                edgecolor='black', linewidth=2)
@@ -104,19 +117,21 @@ ax2.axhline(y=TARGET_AUC, color='red', linestyle='--', linewidth=2, alpha=0.7,
             label=f'Target ({TARGET_AUC:.2f})')
 for bar, val in zip(bars, values):
     ax2.text(bar.get_x() + bar.get_width() / 2., bar.get_height() + 0.02,
-             f'{val:.4f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+             f'{val:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+ax2.tick_params(axis='x', labelsize=8)
 ax2.legend(fontsize=10)
 ax2.grid(True, alpha=0.3, axis='y')
 
-# 3. Similarity distributions
+# 3. Similarity distributions (VGGFace2 cosine)
 ax3 = plt.subplot(2, 3, 3)
+cosine_test = signals_test[0]
 pos_cosine = cosine_test[y_test == 1.0]
 neg_cosine = cosine_test[y_test == 0.0]
 ax3.hist(pos_cosine, bins=40, alpha=0.65, label=f'Related (n={len(pos_cosine)})',
          color='#06A77D', edgecolor='black', linewidth=0.5)
 ax3.hist(neg_cosine, bins=40, alpha=0.65, label=f'Unrelated (n={len(neg_cosine)})',
          color='#D62828', edgecolor='black', linewidth=0.5)
-ax3.set_xlabel('Cosine Similarity', fontsize=11, fontweight='bold')
+ax3.set_xlabel('Cosine Similarity (VGGFace2)', fontsize=11, fontweight='bold')
 ax3.set_ylabel('Frequency', fontsize=11, fontweight='bold')
 ax3.set_title('Embedding Similarity Distribution', fontsize=12, fontweight='bold')
 ax3.legend(fontsize=10)
@@ -163,7 +178,7 @@ ax6.axis('off')
 summary_data = [
     ['Metric', 'Value'],
     ['AUC-ROC (rank blend)', f'{auc:.4f}'],
-    ['Blend weight (cosine)', f'{blend_weight:.1f}'],
+    ['Blend weights', ' / '.join(f'{w:.1f}' for w in blend_weights)],
     ['Accuracy', f'{acc:.4f}'],
     ['Precision', f'{prec:.4f}'],
     ['Recall', f'{rec:.4f}'],

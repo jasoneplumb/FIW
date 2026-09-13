@@ -11,3 +11,4 @@ kaggle==2.1.2
 jupyter==1.1.1
 Pillow==10.2.0
 facenet_pytorch==2.6.0
+onnxruntime==1.19.2

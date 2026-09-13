@@ -23,9 +23,10 @@ import torchvision.transforms as transforms
 from PIL import Image
 from sklearn.metrics import roc_auc_score
 
-from kinship import (build_pairs, clean_relations, embed_images,
-                     pair_features, rank_blend, select_blend_weight,
-                     stack_embeddings, train_logreg_head)
+from kinship import (build_pairs, clean_relations, concat_embeddings,
+                     embed_images, pair_features, rank_blend,
+                     segment_cosines, select_blend_weights, stack_embeddings,
+                     train_logreg_head)
 from pair_sampling import (assert_pair_sets_disjoint, build_excluded_pairs,
                            generate_negative_pairs)
 
@@ -205,22 +206,52 @@ def test_pair_features_are_symmetric():
 def test_rank_blend_extremes_preserve_component_ordering():
     rng = np.random.default_rng(0)
     cos, logits = rng.normal(size=50), rng.normal(size=50)
-    assert (np.argsort(rank_blend(cos, logits, 1.0)) == np.argsort(cos)).all()
-    assert (np.argsort(rank_blend(cos, logits, 0.0)) == np.argsort(logits)).all()
-    blended = rank_blend(cos, logits, 0.5)
+    assert (np.argsort(rank_blend([cos, logits], [1.0, 0.0]))
+            == np.argsort(cos)).all()
+    assert (np.argsort(rank_blend([cos, logits], [0.0, 1.0]))
+            == np.argsort(logits)).all()
+    blended = rank_blend([cos, logits], [0.5, 0.5])
     assert (blended > 0).all() and (blended <= 1).all()
 
 
-def test_select_blend_weight_prefers_the_informative_score():
+def test_select_blend_weights_prefer_the_informative_score():
     rng = np.random.default_rng(0)
     labels = np.array([0.0, 1.0] * 50)
     perfect = labels + rng.normal(scale=0.01, size=100)  # near-perfect signal
     noise = rng.normal(size=100)
-    weight, auc = select_blend_weight(perfect, noise, labels)
-    assert weight == 1.0
+    noise2 = rng.normal(size=100)
+    weights, auc = select_blend_weights([perfect, noise], labels)
+    assert weights == (1.0, 0.0)
     assert auc > 0.99
-    weight, _ = select_blend_weight(noise, perfect, labels)
-    assert weight == 0.0
+    weights, _ = select_blend_weights([noise, noise2, perfect], labels)
+    assert weights == (0.0, 0.0, 1.0)
+
+
+def test_concat_embeddings_aligns_tables_and_drops_missing():
+    table_a = {'x.jpg': np.ones(4, dtype=np.float32),
+               'y.jpg': np.full(4, 2, dtype=np.float32)}
+    table_b = {'x.jpg': np.full(4, 3, dtype=np.float32),
+               'y.jpg': np.full(4, 4, dtype=np.float32),
+               'z.jpg': np.full(4, 5, dtype=np.float32)}
+    pairs = [['x.jpg', 'y.jpg', 1.0], ['x.jpg', 'z.jpg', 0.0]]
+    e1, e2, labels, kept = concat_embeddings([table_a, table_b], pairs)
+    assert len(kept) == 1  # z.jpg is missing from table_a
+    assert e1.shape == (1, 8)
+    assert e1[0, :4].tolist() == [1.0] * 4 and e1[0, 4:].tolist() == [3.0] * 4
+    assert labels.tolist() == [1.0]
+
+
+def test_segment_cosines_match_per_table_cosines():
+    rng = np.random.default_rng(0)
+    a = torch.from_numpy(rng.normal(size=(6, 8)).astype(np.float32))
+    b = torch.from_numpy(rng.normal(size=(6, 8)).astype(np.float32))
+    c = torch.from_numpy(rng.normal(size=(6, 8)).astype(np.float32))
+    d = torch.from_numpy(rng.normal(size=(6, 8)).astype(np.float32))
+    e1, e2 = torch.cat([a, c], dim=1), torch.cat([b, d], dim=1)
+    seg = segment_cosines(e1, e2, dim=8)
+    assert len(seg) == 2
+    assert np.allclose(seg[0], torch.nn.functional.cosine_similarity(a, b).numpy())
+    assert np.allclose(seg[1], torch.nn.functional.cosine_similarity(c, d).numpy())
 
 
 def test_train_logreg_head_learns_separable_data():
