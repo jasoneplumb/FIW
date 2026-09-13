@@ -1,23 +1,29 @@
-"""Kinship scoring from frozen face embeddings (issue #14).
+"""Kinship scoring from frozen face embeddings (issues #14, #16).
 
-The pipeline replaces fine-tuning with three fixed stages:
+The pipeline has no fine-tuning:
 
-1. A frozen pretrained ``InceptionResnetV1`` (FaceNet, VGGFace2) encoder
-   embeds each face image once at its native 160x160 input size. The
-   encoder's ``forward()`` L2-normalizes embeddings, so cosine similarity
-   and Euclidean distance rank pairs identically.
-2. A logistic-regression head (``nn.Linear(1024, 1)``) scores pair features
-   ``[|e1 - e2|, e1 * e2]``, trained with early stopping on validation AUC.
-3. The final score rank-blends cosine similarity with the head logit; the
-   blend weight is selected on the validation split.
+1. Frozen pretrained encoders embed each face image exactly once, cached
+   per encoder: two ``InceptionResnetV1`` variants (VGGFace2 and
+   CASIA-WebFace weights, native 160x160) and an ArcFace ONNX recognizer
+   (w600k_r50, 112x112). All embeddings are L2-normalized, so cosine
+   similarity and Euclidean distance rank pairs identically.
+2. A logistic-regression head scores the concatenated symmetric pair
+   features ``[|e1 - e2|, e1 * e2]`` across encoders, trained with early
+   stopping on validation AUC.
+3. The final score rank-blends the per-encoder cosine similarities with
+   the head logit; the blend weights are selected on the validation split
+   over a simplex grid.
 
 Image-load failures are tracked per image: failed images are excluded from
-the embedding table and every pair touching one is dropped from evaluation
-(``stack_embeddings``), so zero-filled tensors never enter a metric.
+the embedding tables and every pair touching one is dropped from evaluation
+(``stack_embeddings``/``concat_embeddings``), so zero-filled tensors never
+enter a metric.
 """
 
+import itertools
 import os
 import random
+import urllib.request
 
 import numpy as np
 import torch
@@ -30,6 +36,10 @@ from pair_sampling import (assert_pair_sets_disjoint, build_excluded_pairs,
                            generate_negative_pairs)
 
 EMBED_INPUT_SIZE = 160
+ARCFACE_INPUT_SIZE = 112
+ARCFACE_URL = ('https://huggingface.co/immich-app/buffalo_l/resolve/main/'
+               'recognition/model.onnx')
+ARCFACE_MODEL_PATH = '_cache/arcface-w600k-r50.onnx'
 
 eval_transform = transforms.Compose([
     transforms.Resize((EMBED_INPUT_SIZE, EMBED_INPUT_SIZE)),
@@ -37,14 +47,53 @@ eval_transform = transforms.Compose([
     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
 ])
 
+# ArcFace expects (x - 127.5) / 127.5 RGB at 112x112 — the same math as
+# ToTensor + Normalize(0.5, 0.5), only at the smaller input size.
+arcface_transform = transforms.Compose([
+    transforms.Resize((ARCFACE_INPUT_SIZE, ARCFACE_INPUT_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+])
 
-def load_encoder(device='cpu'):
-    """Load the frozen pretrained FaceNet encoder in eval mode."""
+
+def load_encoder(device='cpu', pretrained='vggface2'):
+    """Load a frozen pretrained FaceNet encoder ('vggface2' or 'casia-webface')."""
     from facenet_pytorch import InceptionResnetV1
-    encoder = InceptionResnetV1(pretrained='vggface2').eval().to(device)
+    encoder = InceptionResnetV1(pretrained=pretrained).eval().to(device)
     for param in encoder.parameters():
         param.requires_grad = False
     return encoder
+
+
+def download_arcface(dest=ARCFACE_MODEL_PATH, url=ARCFACE_URL):
+    """Download the ArcFace w600k_r50 ONNX recognizer (~174MB) once."""
+    if os.path.exists(dest):
+        return dest
+    os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
+    print(f'Downloading ArcFace model to {dest} ...')
+    urllib.request.urlretrieve(url, dest)
+    return dest
+
+
+class ArcFaceEncoder:
+    """ArcFace ONNX recognizer wrapped as an ``embed_images`` encoder.
+
+    Takes a (B, 3, 112, 112) tensor preprocessed by ``arcface_transform``
+    and returns L2-normalized (B, 512) embeddings.
+    """
+
+    def __init__(self, model_path=ARCFACE_MODEL_PATH, num_threads=None):
+        import onnxruntime as ort
+        options = ort.SessionOptions()
+        if num_threads:
+            options.intra_op_num_threads = num_threads
+        self.session = ort.InferenceSession(model_path, sess_options=options,
+                                            providers=['CPUExecutionProvider'])
+        self.input_name = self.session.get_inputs()[0].name
+
+    def __call__(self, batch):
+        out = self.session.run(None, {self.input_name: batch.cpu().numpy()})[0]
+        return torch.nn.functional.normalize(torch.from_numpy(out), p=2, dim=1)
 
 
 def embed_images(encoder, image_paths, image_root, device='cpu',
@@ -179,6 +228,37 @@ def stack_embeddings(embeddings, pairs):
     return e1, e2, labels, kept
 
 
+def concat_embeddings(tables, pairs):
+    """Stack pairs across multiple embedding tables, concatenating vectors.
+
+    ``tables`` is an ordered sequence of {path: embedding} dicts. A pair is
+    kept only when both of its images embedded in every table, so all
+    per-encoder signals stay aligned on the same pair list. Returns
+    (e1, e2, labels, kept_pairs).
+    """
+    kept = [p for p in pairs
+            if all(p[0] in t and p[1] in t for t in tables)]
+    dropped = len(pairs) - len(kept)
+    if dropped:
+        print(f'[Warning] Dropped {dropped} pairs with missing embeddings')
+    e1 = torch.cat([torch.from_numpy(np.stack([t[p[0]] for p in kept]))
+                    for t in tables], dim=1)
+    e2 = torch.cat([torch.from_numpy(np.stack([t[p[1]] for p in kept]))
+                    for t in tables], dim=1)
+    labels = np.array([p[2] for p in kept], dtype=np.float32)
+    return e1, e2, labels, kept
+
+
+def segment_cosines(e1, e2, dim=512):
+    """Per-encoder cosine similarities from concatenated embeddings.
+
+    Splits the concatenation into ``dim``-sized segments (one per encoder,
+    each unit-norm) and returns a list of cosine-score arrays.
+    """
+    return [cosine_scores(e1[:, start:start + dim], e2[:, start:start + dim])
+            for start in range(0, e1.shape[1], dim)]
+
+
 def pair_features(e1, e2):
     """Symmetric pair features for the head: [|e1 - e2|, e1 * e2]."""
     return torch.cat([(e1 - e2).abs(), e1 * e2], dim=1)
@@ -252,17 +332,32 @@ def _normalized_ranks(scores):
     return ranks / len(scores)
 
 
-def rank_blend(cos, logits, weight):
-    """Blend two score lists by their normalized ranks; result in (0, 1]."""
-    return weight * _normalized_ranks(cos) + (1 - weight) * _normalized_ranks(logits)
+def rank_blend(scores, weights):
+    """Blend score lists by their normalized ranks; result in (0, 1].
+
+    ``scores`` and ``weights`` are same-length sequences; weights should
+    sum to 1 for a score in (0, 1].
+    """
+    return sum(w * _normalized_ranks(s) for s, w in zip(scores, weights))
 
 
-def select_blend_weight(cos_val, logit_val, y_val,
-                        grid=np.arange(0.0, 1.01, 0.1)):
-    """Pick the blend weight maximizing validation AUC. Returns (w, auc)."""
-    best_weight, best_auc = 0.5, 0.0
-    for weight in grid:
-        auc = roc_auc_score(y_val, rank_blend(cos_val, logit_val, weight))
+def _simplex_grid(k, step=0.1):
+    """All k-tuples of non-negative multiples of ``step`` summing to 1."""
+    n = round(1 / step)
+    for combo in itertools.product(range(n + 1), repeat=k - 1):
+        if sum(combo) <= n:
+            yield tuple(c / n for c in combo) + ((n - sum(combo)) / n,)
+
+
+def select_blend_weights(scores_val, y_val, step=0.1):
+    """Grid-search simplex weights maximizing validation AUC.
+
+    ``scores_val`` is a sequence of per-signal score arrays on the
+    validation split. Returns (weights tuple, best val AUC).
+    """
+    best_weights, best_auc = None, 0.0
+    for weights in _simplex_grid(len(scores_val), step):
+        auc = roc_auc_score(y_val, rank_blend(scores_val, weights))
         if auc > best_auc:
-            best_auc, best_weight = auc, float(weight)
-    return best_weight, best_auc
+            best_auc, best_weights = auc, weights
+    return best_weights, best_auc
