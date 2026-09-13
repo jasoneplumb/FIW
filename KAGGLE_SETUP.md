@@ -21,7 +21,7 @@ This guide shows how to run the FIW kinship verification model on Kaggle's cloud
 
 ### 4. Run the Notebook
 - Click **"Run All"** (or run cells sequentially)
-- Expected runtime: **~15 minutes** with GPU enabled
+- Expected runtime: **~15 minutes** with GPU enabled (mostly one-time embedding)
 - Monitor progress in the output cells
 
 ## Features of the Kaggle Notebook
@@ -41,12 +41,12 @@ This guide shows how to run the FIW kinship verification model on Kaggle's cloud
 ✅ **Real-time evaluation:**
 - AUC-ROC, accuracy, precision, recall
 - ROC curve visualization
-- Distance distribution plots
+- Similarity distribution plots
 - Success metric check (AUC ≥ 0.80)
 
 ## Enable GPU (Recommended)
 
-For fastest training (8-12 min instead of 30+):
+For fastest embedding (a few minutes instead of ~40 on CPU):
 
 1. In your Kaggle notebook, click **⚙️ Settings** (top right)
 2. Under **Accelerator**, select **GPU**
@@ -61,8 +61,8 @@ Estimated times:
 ## Outputs
 
 After execution, check `/kaggle/working/`:
-- **model.pth** — Trained model weights
-- **evaluation.png** — ROC curve + distance plots
+- **logreg-head.pth** — Trained scoring-head weights
+- **evaluation.png** — ROC curve + similarity plots
 
 Download these for local use.
 
@@ -73,11 +73,10 @@ Download these for local use.
 - Wait for the pip install to complete
 
 **"Memory limit exceeded"**
-- Reduce `batch_size` from 64 to 32 in the DataLoader cells
-- Or reduce training epochs from 10 to 5
+- Reduce the embedding `batch_size` from 128 to 64 in the embedding cell
 
 **"CUDA out of memory" (GPU only)**
-- Use smaller batch size: `batch_size = 32`
+- Use a smaller embedding batch size: `batch_size = 64`
 - Switch to P100 or CPU if T4 fails
 
 **Notebook timeouts (>10 hours)**
@@ -96,21 +95,23 @@ On first run, you should see:
 
 ```
 === TEST RESULTS ===
-AUC-ROC:           0.7X to 0.8X (depends on random initialization)
-Optimal Threshold: 0.XX
-Accuracy:          0.XX
-Precision:         0.XX
-Recall:            0.XX
-
-✓ SUCCESS: AUC 0.80+ meets epic target
+AUC — cosine only:      ~0.75
+AUC — logreg head only: ~0.75
+AUC — rank blend:       ~0.76
+Optimal Threshold:      ~0.49
+Accuracy:               ~0.70
+Precision:              ~0.70
+Recall:                 ~0.70
 ```
+
+The pipeline is deterministic up to hardware differences (seeded splits, frozen encoder), so results should closely match the values above.
 
 ## Next Steps
 
-- Use the trained model for inference on new images
-- Fine-tune hyperparameters (margin, learning rate, epochs)
+- Use the cached embeddings and trained head for inference on new images
+- Tune the scoring head (features, regularization) or the blend-weight grid
+- Ensemble additional pretrained face encoders (e.g., ArcFace)
 - Add additional training data
-- Experiment with different backbone architectures
 
 ## Links
 

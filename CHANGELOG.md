@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Replaced fine-tuned Siamese training with frozen FaceNet embeddings + cosine/logreg rank-blend — test AUC 0.674 → 0.764 (#14)
+- Encoder input resolution restored to the pretrained model's native 160×160 (was 112×112) (#14)
+- Notebook pair generation now uses the `pair_sampling.py` policy (no same-family negatives, disjointness asserted) (#14)
+- Submission step now scores exactly the 5,310 pairs listed in `sample_submission.csv` with keys preserved verbatim, embedding each referenced image once — previously all ~11.8M combinations of the wrong image set (`test-faces.zip`, unreferenced by `sample_submission.csv`; the referenced images are in `test.zip`) (#14)
+- `visualize_auc.py` rewritten for the blend pipeline; it now cleans relations before splitting (previously split on uncleaned data, diverging from the notebook) and no longer renders a simulated training-progress chart (#14)
+- `quick_verify.py` rewritten to verify the encoder, pair features, head, and rank-blend (#14)
+- `kaggle.ipynb` aligned with the new pipeline (inline copies of the sampling/scoring helpers) (#14)
+
+### Added
+- `kinship.py` — scoring pipeline: cached frozen embeddings with load-failure tracking, relation cleaning, family-aware pair building, logreg head training, rank-blend and blend-weight selection (#14)
+- Invariant tests for the scoring pipeline using a stub encoder (no dataset or pretrained weights needed in CI) (#14)
+
+### Removed
+- End-to-end Siamese training: SiameseNetwork, ContrastiveLoss, training loop, data augmentation, and the 512→128 projection head — measurement showed the frozen encoder outperforms the fine-tuned network (#14)
+- `extract_metrics.py` and `image_pair_dataset.py` — redundant under the embedding pipeline; load-failure handling is covered by `kinship.embed_images`/`stack_embeddings` and their tests (#14)
+
 ## [0.6.0] - 2026-03-18
 
 ### Changed

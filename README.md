@@ -3,22 +3,23 @@
 ![CI](https://github.com/jasoneplumb/FIW/actions/workflows/ci.yml/badge.svg)
 ![Python 3.11](https://img.shields.io/badge/python-3.11-blue)
 ![PyTorch](https://img.shields.io/badge/pytorch-2.0%2B-ee4c2c)
-![AUC](https://img.shields.io/badge/AUC--ROC-0.674-yellow)
+![AUC](https://img.shields.io/badge/AUC--ROC-0.764-yellow)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-Kinship verification from facial images using a Siamese convolutional neural network trained on the [Families in the Wild](https://www.kaggle.com/c/recognizing-faces-in-the-wild) dataset from Northeastern University's SMILE Lab.
+Kinship verification from facial images using frozen pretrained FaceNet embeddings and a lightweight learned scoring head, on the [Families in the Wild](https://www.kaggle.com/c/recognizing-faces-in-the-wild) dataset from Northeastern University's SMILE Lab.
 
-Given a pair of face images, the model predicts the probability that the two individuals are related.
+Given a pair of face images, the pipeline scores how likely the two individuals are to be related.
 
 ## Motivation
 
-This project explores a core challenge in computer vision: can a neural network learn to recognize familial resemblance from unconstrained face images? Beyond the Kaggle competition, it serves as a case study in deliberate, iterative model development — evolving from a naive 2-layer CNN (v0.1) to a fine-tuned FaceNet backbone (v0.6) through a series of principled improvements:
+This project explores a core challenge in computer vision: can a neural network learn to recognize familial resemblance from unconstrained face images? Beyond the Kaggle competition, it serves as a case study in deliberate, iterative model development — evolving from a naive 2-layer CNN (v0.1) through a fine-tuned FaceNet backbone (v0.6) to a simpler, stronger frozen-embedding pipeline (v0.7) through a series of principled improvements:
 
 - **v0.1** — Baseline Siamese CNN with a 2K-pair subsample
 - **v0.2–v0.3** — Fixed inverted contrastive loss, added reproducibility seeds, cross-platform support
 - **v0.4** — Added proper evaluation metrics (AUC-ROC, Youden's J threshold)
 - **v0.5** — Scaled to full dataset with family-aware splits to eliminate data leakage
 - **v0.6** — Pretrained FaceNet backbone with selective fine-tuning and data augmentation
+- **v0.7** — Replaced fine-tuning with frozen embeddings + cosine/logreg rank-blend after measuring that the unmodified pretrained encoder outperformed the fine-tuned network zero-shot (0.743 vs 0.674 on the v0.6 evaluation protocol)
 
 Each version addressed a specific weakness exposed by the previous iteration. The full history is in the [CHANGELOG](CHANGELOG.md).
 
@@ -26,35 +27,38 @@ Each version addressed a specific weakness exposed by the previous iteration. Th
 
 ![AUC Visualization](auc_visualization.png)
 
-Measured on the held-out test split (21,674 pairs: 10,837 related + 10,837 unrelated, from families unseen during training):
+Measured on the held-out test split (23,776 pairs: 11,888 related + 11,888 unrelated, from families unseen during training):
 
 | Metric | Value |
-|--------|-------|
-| **AUC-ROC** | 0.674 |
-| **Accuracy** | 0.626 |
-| **Precision** | 0.631 |
-| **Recall** | 0.605 |
-| **Threshold Selection** | Youden's J statistic (0.448) |
-| **Training Pairs** | ~216K balanced (108K related + 108K unrelated) |
-| **Training Time** | ~12 min (GPU T4) / ~35 min (CPU) |
+|--------|------|
+| **AUC-ROC (rank blend)** | 0.764 |
+| AUC-ROC (cosine only) | 0.749 |
+| AUC-ROC (logreg head only) | 0.754 |
+| **Accuracy** | 0.697 |
+| **Precision** | 0.695 |
+| **Recall** | 0.701 |
+| **Threshold Selection** | Youden's J statistic (0.489) |
+| **Head Training Pairs** | ~216K balanced (108K related + 108K unrelated) |
+| **Runtime** | one-time embedding ~40 min (CPU) or minutes (GPU), then head training ~5 min; embeddings are cached so re-runs skip the expensive step |
 
-Related and unrelated pairs separate in the expected direction — related pairs have lower mean embedding distance — but the distributions overlap substantially, which is what the 0.674 AUC reflects. The operating point is selected via Youden's J on the ROC curve. The project's original success criterion of AUC ≥ 0.80 has not been met.
+For comparison, the previous fine-tuned Siamese network (v0.6) reported 0.674 under its own evaluation protocol, which permitted same-family negative pairs; v0.7 numbers use the stricter `pair_sampling.py` policy. Related and unrelated pairs separate in the expected direction — related pairs have higher mean cosine similarity — but the distributions overlap substantially, which the 0.764 AUC reflects. The operating point is selected via Youden's J on the ROC curve. The project's original success criterion of AUC ≥ 0.80 has not been met.
 
 ## Architecture
 
-A Siamese network with shared weights uses a pretrained InceptionResnetV1 (FaceNet, VGGFace2) backbone with frozen early layers and fine-tuned last 2 blocks (repeat_3, block8), followed by a fully connected head (512→128) to produce a 128-dimensional embedding. Pairs are compared via Euclidean distance and trained with contrastive loss.
+The pipeline (`kinship.py`) has no fine-tuning. A frozen pretrained InceptionResnetV1 (FaceNet, VGGFace2) encoder embeds each face image exactly once at its native 160×160 input size; its forward pass L2-normalizes the 512-d embeddings. Pairs are scored by rank-blending two signals: raw cosine similarity between the embeddings, and the logit of a logistic-regression head (`Linear(1024, 1)`) over the symmetric pair features `[|e1−e2|, e1⊙e2]`. The blend weight is selected on the validation split.
 
-- **Input**: 112x112 RGB face images
-- **Backbone**: InceptionResnetV1 (pretrained on VGGFace2) with selective fine-tuning
-- **Training**: ~216K balanced pairs (108K related + 108K unrelated), family-aware 70/15/15 split
-- **Data Augmentation**: Random horizontal flip, rotation (+-10 deg), color jitter
-- **Optimizer**: Adam (lr=0.0001), 10 epochs, batch size 64
+- **Input**: 160x160 RGB face images (the encoder's native size)
+- **Encoder**: InceptionResnetV1 (pretrained on VGGFace2), frozen, eval mode
+- **Trained component**: a single linear layer (2,049 parameters), Adam (lr=0.01, cosine decay), early-stopped on validation AUC
+- **Final score**: rank-blend of cosine similarity (weight 0.7, chosen on val) and head logit
+- **Pairs**: ~216K balanced training pairs, family-aware 70/15/15 split
 
 ### Key Engineering Decisions
 
-- **Family-aware splits** prevent data leakage — no family appears in more than one split, ensuring the model generalizes to unseen families rather than memorizing individuals
-- **Transfer learning with selective fine-tuning** — freezing early FaceNet layers preserves general face features while fine-tuning the last 2 blocks adapts to kinship-specific patterns
-- **Balanced pair generation** — equal positive/negative sampling prevents the model from exploiting class imbalance
+- **Family-aware splits** prevent data leakage — no family appears in more than one split, ensuring evaluation on unseen families rather than memorized individuals
+- **Frozen encoder over fine-tuning** — measurement showed v0.6's fine-tuning *hurt*: it dropped the encoder's final L2 normalization, scrambled the pretrained embedding through a randomly initialized projection, let BatchNorm statistics drift on frozen layers, and used 112×112 inputs instead of the native 160×160. On the v0.6 protocol the unmodified encoder scored 0.743 zero-shot vs 0.674 fine-tuned
+- **Policy-checked negative sampling** (`pair_sampling.py`) — negatives are never the same member, a known relation, or two members of the same family; positive/negative sets are asserted disjoint
+- **Embed once, score cheaply** — each image is embedded exactly once and cached (`_cache/`), so iterating on the scoring head or blend takes seconds, and submission scoring needs one forward pass per image instead of one per pair
 
 ## Quick Start
 
@@ -83,23 +87,22 @@ For cloud execution with free GPU, see the [Kaggle Setup Guide](KAGGLE_SETUP.md)
 
 1. **Download** — Fetches competition data via the Kaggle API
 2. **Clean** — Loads `train_relationships.csv`, removes pairs with missing image data (1,108 of 3,598 removed)
-3. **Split** — Family-aware 70/15/15 split (no family leaks across splits), balanced positive/negative pairs
-4. **Train** — Siamese network with contrastive loss for 10 epochs
-5. **Evaluate** — AUC-ROC, accuracy, precision, recall at optimal threshold (Youden's J); ROC curve and distance distribution plots
-6. **Submit** — Generates `submission.csv` with pairwise relatedness probabilities for all ~11.8M test pairs
+3. **Split** — Family-aware 70/15/15 split (no family leaks across splits), balanced positive/negative pairs under the `pair_sampling.py` policy
+4. **Embed + Train** — Frozen FaceNet embeds each face once (cached); a logistic-regression head is trained on pair features with early stopping on validation AUC
+5. **Evaluate** — AUC-ROC for cosine, head, and rank-blend scores; accuracy, precision, recall at optimal threshold (Youden's J); ROC curve and similarity distribution plots
+6. **Submit** — Scores exactly the 5,310 image pairs requested by `sample_submission.csv` (from the `test.zip` image set) and writes `submission.csv` with the keys preserved verbatim
 
 ## Project Structure
 
 ```
-main.ipynb              # End-to-end pipeline (download -> train -> evaluate -> submit)
+main.ipynb              # End-to-end pipeline (download -> embed -> train head -> evaluate -> submit)
 kaggle.ipynb            # Cloud-optimized variant for Kaggle Notebooks
 run.sh                  # Setup and launch script
-extract_metrics.py      # Standalone metrics extraction from trained model
+kinship.py              # Scoring pipeline: embeddings, logreg head, rank-blend
 pair_sampling.py        # Negative-sampling policy and pair-set helpers
-image_pair_dataset.py   # Image-pair dataset with load-failure handling
 test_invariants.py      # Fast invariant checks (run by CI on every push/PR)
 visualize_auc.py        # Generates AUC visualization dashboard
-quick_verify.py         # Component verification (model, loss, metrics)
+quick_verify.py         # Component verification (encoder, head, blend, metrics)
 requirements.txt        # Python dependencies (pinned to tested versions)
 requirements-dev.txt    # Dev/CI extras (pytest) on top of requirements.txt
 .github/workflows/ci.yml  # CI: env install + sampling/evaluation invariants
