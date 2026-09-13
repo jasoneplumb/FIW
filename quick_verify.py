@@ -1,138 +1,53 @@
 #!/usr/bin/env python3
-"""Quick verification without loading images"""
+"""Quick component verification for the kinship pipeline (no dataset needed)."""
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from facenet_pytorch import InceptionResnetV1
 import numpy as np
+import torch
 from sklearn.metrics import roc_auc_score
 
-print("=" * 60)
-print("FIW Notebook - Quick Component Verification")
-print("=" * 60)
+import kinship
 
-# 1. Check device
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    print(f"\n[1] Device: {device} (CUDA)")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-    print(f"\n[1] Device: {device} (MPS)")
-else:
-    device = torch.device("cpu")
-    print(f"\n[1] Device: {device} (CPU)")
+print('=' * 60)
+print('FIW - Quick Component Verification')
+print('=' * 60)
 
-# 2. Load FaceNet backbone
-print("\n[2] Loading FaceNet backbone...")
-try:
-    backbone = InceptionResnetV1(pretrained='vggface2')
-    print("    [OK] InceptionResnetV1 loaded with VGGFace2 weights")
-except Exception as e:
-    print(f"    [ERROR] Failed to load backbone: {e}")
-    exit(1)
+# 1. Frozen encoder
+print('\n[1] Loading frozen FaceNet encoder...')
+encoder = kinship.load_encoder()
+assert not any(p.requires_grad for p in encoder.parameters())
+print('    [OK] InceptionResnetV1 (VGGFace2) loaded, frozen, eval mode')
 
-# 3. Test architecture
-print("\n[3] Testing Siamese network architecture...")
-
-class SiameseNetwork(nn.Module):
-    def __init__(self):
-        super(SiameseNetwork, self).__init__()
-        backbone = InceptionResnetV1(pretrained='vggface2')
-        for param in backbone.parameters():
-            param.requires_grad = False
-        for name, param in backbone.named_parameters():
-            if name.startswith('repeat_3.') or name.startswith('block8.'):
-                param.requires_grad = True
-        self.backbone = nn.Sequential(
-            backbone.conv2d_1a, backbone.conv2d_2a, backbone.conv2d_2b,
-            backbone.maxpool_3a, backbone.conv2d_3b, backbone.conv2d_4a,
-            backbone.conv2d_4b, backbone.repeat_1, backbone.mixed_6a,
-            backbone.repeat_2, backbone.mixed_7a, backbone.repeat_3,
-            backbone.block8, backbone.avgpool_1a, nn.Flatten(),
-            backbone.dropout, backbone.last_linear, backbone.last_bn,
-        )
-        self.fc1 = nn.Linear(512, 128)
-    def forward_once(self, x):
-        output = self.backbone(x)
-        output = self.fc1(output)
-        return output
-    def forward(self, input1, input2):
-        output1 = self.forward_once(input1)
-        output2 = self.forward_once(input2)
-        return output1, output2
-
-model = SiameseNetwork().to(device)
-print("    [OK] Siamese network created")
-
-# 4. Test forward pass
-print("\n[4] Testing forward pass...")
+# 2. Embedding forward pass at the native input size
+print('\n[2] Testing embedding forward pass...')
 with torch.no_grad():
-    dummy_img1 = torch.randn(2, 3, 112, 112).to(device)
-    dummy_img2 = torch.randn(2, 3, 112, 112).to(device)
-    out1, out2 = model(dummy_img1, dummy_img2)
-    print(f"    [OK] Output shape: {out1.shape} (embedding_size=128)")
-    assert out1.shape == (2, 128), f"Expected shape (2, 128), got {out1.shape}"
+    dummy = torch.randn(2, 3, kinship.EMBED_INPUT_SIZE, kinship.EMBED_INPUT_SIZE)
+    emb = encoder(dummy)
+assert emb.shape == (2, 512), f'Expected (2, 512), got {emb.shape}'
+norms = emb.norm(dim=1)
+assert torch.allclose(norms, torch.ones(2), atol=1e-4), 'embeddings not L2-normalized'
+print(f'    [OK] Output shape {tuple(emb.shape)}, L2-normalized (norms {norms.tolist()})')
 
-# 5. Test contrastive loss
-print("\n[5] Testing contrastive loss...")
+# 3. Pair features and head
+print('\n[3] Testing pair features and scoring head...')
+head = kinship.make_head()
+features = kinship.pair_features(emb[:1], emb[1:])
+assert features.shape == (1, 1024)
+logits = kinship.logit_scores(head, emb[:1], emb[1:])
+assert logits.shape == (1,)
+print('    [OK] pair_features -> (1, 1024), head logit computed')
 
-class ContrastiveLoss(nn.Module):
-    def __init__(self, margin=2.0):
-        super(ContrastiveLoss, self).__init__()
-        self.margin = margin
-    def forward(self, output1, output2, label):
-        euclidean_distance = F.pairwise_distance(output1, output2, keepdim=True)
-        loss_contrastive = torch.mean((label) * torch.pow(euclidean_distance, 2) +
-                                      (1-label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
-        return loss_contrastive
+# 4. Rank blend and AUC on synthetic scores
+print('\n[4] Testing rank blend and AUC calculation...')
+rng = np.random.default_rng(42)
+labels = np.array([1.0] * 100 + [0.0] * 100)
+cosine = np.concatenate([rng.normal(0.6, 0.2, 100), rng.normal(0.2, 0.2, 100)])
+logit = np.concatenate([rng.normal(1.0, 0.5, 100), rng.normal(-1.0, 0.5, 100)])
+weight, val_auc = kinship.select_blend_weight(cosine, logit, labels)
+blended = kinship.rank_blend(cosine, logit, weight)
+auc = roc_auc_score(labels, blended)
+assert 0.5 < auc <= 1.0
+print(f'    [OK] blend weight {weight:.1f}, synthetic AUC {auc:.4f}')
 
-criterion = ContrastiveLoss()
-with torch.no_grad():
-    dummy_out1 = torch.randn(4, 128).to(device)
-    dummy_out2 = torch.randn(4, 128).to(device)
-    dummy_labels = torch.tensor([1.0, 1.0, 0.0, 0.0]).to(device)
-    loss = criterion(dummy_out1, dummy_out2, dummy_labels)
-    print(f"    [OK] Contrastive loss computed: {loss.item():.4f}")
-
-# 6. Test AUC metric calculation
-print("\n[6] Testing AUC-ROC metric...")
-# Simulate predictions and labels
-np.random.seed(42)
-torch.manual_seed(42)
-
-# Generate synthetic distances that show good separation
-related_distances = np.random.normal(0.5, 0.2, 100)  # Related pairs: small distances
-unrelated_distances = np.random.normal(2.0, 0.3, 100)  # Unrelated pairs: large distances
-
-distances = np.concatenate([related_distances, unrelated_distances])
-labels = np.concatenate([np.ones(100), np.zeros(100)])
-
-# Convert distances to similarity scores
-scores = 1 - (distances / distances.max())
-
-# Calculate AUC
-auc = roc_auc_score(labels, scores)
-print(f"    [OK] AUC-ROC on synthetic data: {auc:.4f}")
-print(f"    [OK] Related pairs mean distance: {related_distances.mean():.4f}")
-print(f"    [OK] Unrelated pairs mean distance: {unrelated_distances.mean():.4f}")
-
-# 7. Verify distance ordering
-print("\n[7] Verifying embedding properties...")
-print(f"    [OK] Related distances < Unrelated distances: {related_distances.mean() < unrelated_distances.mean()}")
-
-print("\n" + "=" * 60)
-print("VERIFICATION COMPLETE")
-print("=" * 60)
-print("\n[Summary]")
-print("- FaceNet backbone (InceptionResnetV1): [OK]")
-print("- Siamese network architecture: [OK]")
-print("- Contrastive loss function: [OK]")
-print("- AUC-ROC metric calculation: [OK]")
-print("- Distance ordering (related < unrelated): [OK]")
-print("\n[Conclusion]")
-print("The notebook implementation is CORRECT and COMPLETE.")
-print("All core components are functional and properly implemented.")
-print("\nNote: Full notebook execution pending completion")
-print("      (training on full dataset takes 2-4 hours on CPU)")
-print("=" * 60)
+print('\n' + '=' * 60)
+print('VERIFICATION COMPLETE — all components functional')
+print('=' * 60)
